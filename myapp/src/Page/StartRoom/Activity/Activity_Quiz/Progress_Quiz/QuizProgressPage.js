@@ -1,0 +1,208 @@
+import { useEffect, useState } from "react";
+import { socket } from "../../../../../socket";
+import { useTeacher } from "../../../../TeacherContext";
+
+function QuizProgressPage({
+  activitySessionId,
+  totalQuestions,
+  timeType,
+  quizTimeLimit,
+  questionTimeLimit,
+  onEndQuiz,
+}) {
+  const [progress, setProgress] = useState([]);
+  const [autoEnded, setAutoEnded] = useState(false);
+  const { teacherId } = useTeacher();
+  const [timer, setTimer] = useState(() => {
+    if (timeType === "quiz" && quizTimeLimit != null) {
+      return quizTimeLimit * 60;
+    } else if (timeType === "question" && questionTimeLimit != null) {
+      return questionTimeLimit;
+    } else return null;
+  });
+
+  console.log("QuizProgressPage render", { timeType, timer });
+
+  /* =========================
+     Fetch progress
+  ========================= */
+  useEffect(() => {
+    if (!activitySessionId) return;
+
+    socket.emit("get_quiz_progress", { activitySessionId });
+
+    const handler = (data) => setProgress(data);
+
+    socket.on("quiz_progress_data", handler);
+
+    socket.on("quiz_progress_updated", () => {
+      socket.emit("get_quiz_progress", { activitySessionId });
+    });
+
+    return () => {
+      socket.off("quiz_progress_data", handler);
+      socket.off("quiz_progress_updated");
+    };
+  }, [activitySessionId]);
+
+  /* =========================
+     Quiz timer countdown
+  ========================= */
+  useEffect(() => {
+    if (timeType !== "quiz" || timer === null) return;
+
+    if (timer <= 0) {
+      socket.emit("end_quiz", { activitySessionId });
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setTimer((t) => t - 1);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [timer, timeType, activitySessionId]);
+
+  /* =========================
+     Listen quiz end
+  ========================= */
+  useEffect(() => {
+    const handler = () => {
+      onEndQuiz?.();
+    };
+
+    socket.on("quiz_ended", handler);
+
+    return () => socket.off("quiz_ended", handler);
+  }, [onEndQuiz]);
+
+  /* =========================
+     Helper
+  ========================= */
+  const finishedCount = progress.filter(
+    (p) => p.current_question >= totalQuestions
+  ).length;
+
+  const formatTime = (seconds) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
+
+  /* =========================
+     Auto end when everyone finished
+  ========================= */
+  useEffect(() => {
+    if (!progress.length || autoEnded) return;
+
+    const finished = progress.filter(
+      (p) => p.current_question >= totalQuestions
+    ).length;
+
+    if (finished === progress.length) {
+      setAutoEnded(true);
+
+      setTimeout(() => {
+        socket.emit("end_quiz", { activitySessionId });
+      }, 1000);
+    }
+  }, [progress, totalQuestions, activitySessionId, autoEnded]);
+
+  return (
+    <div className="w-full min-h-screen bg-slate-900 text-white flex flex-col items-center py-8 px-4">
+
+      {/* Title */}
+      <div className="text-center mb-6">
+        <h1 className="text-3xl font-bold">Quiz Progress</h1>
+
+        <p className="text-slate-400 mt-2">
+          Students completed{" "}
+          <span className="text-cyan-400 font-semibold">
+            {finishedCount}/{progress.length}
+          </span>
+        </p>
+      </div>
+
+      {/* Quiz Timer */}
+      {timeType === "quiz" && timer !== null && (
+        <div
+          className={`mb-8 w-32 h-32 rounded-full flex items-center justify-center text-3xl font-bold shadow-lg border
+          ${
+            timer <= 5
+              ? "bg-rose-500 border-rose-400"
+              : "bg-slate-800 border-slate-700"
+          }`}
+        >
+          {formatTime(timer)}
+        </div>
+      )}
+
+      {/* Progress Card */}
+      <div className="w-full max-w-3xl bg-slate-800 border border-slate-700 rounded-2xl p-6 space-y-4">
+
+        {progress.map((p) => {
+          const percent =
+            totalQuestions > 0
+              ? Math.round((p.current_question / totalQuestions) * 100)
+              : 0;
+
+          const finished = percent >= 100;
+
+          return (
+            <div
+              key={p.Student_ID}
+              className="flex items-center gap-4"
+            >
+              {/* Name */}
+              <div className="w-28 sm:w-36 text-sm font-medium truncate text-slate-200">
+                {p.Student_Name}
+              </div>
+
+              {/* Bar */}
+              <div className="flex-1 h-4 bg-slate-700 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-500
+                  ${
+                    finished
+                      ? "bg-green-500"
+                      : "bg-cyan-400"
+                  }`}
+                  style={{ width: `${percent}%` }}
+                />
+              </div>
+
+              {/* Percent */}
+              <div className="w-16 text-right text-sm text-slate-300">
+                {percent}% ({p.current_question}/{totalQuestions})
+              </div>
+            </div>
+          );
+        })}
+
+        {progress.length === 0 && (
+          <p className="text-center text-slate-400 py-6">
+            Waiting for students...
+          </p>
+        )}
+      </div>
+
+      {/* Footer buttons */}
+      <div className="mt-10 space-y-3 w-full max-w-xs">
+
+        <button
+          onClick={() => {
+            socket.emit("force_submit", { activitySessionId });
+            socket.emit("end_quiz", { activitySessionId });
+          }}
+          className="w-full py-3 rounded-xl font-semibold
+          bg-rose-500 hover:bg-rose-400 transition"
+        >
+          End Quiz
+        </button>
+
+      </div>
+    </div>
+  );
+}
+
+export default QuizProgressPage;
